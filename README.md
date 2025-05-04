@@ -20,7 +20,7 @@ This plugin will partially fix the UI of this game and make it playable with UEV
   - On the map screen, use the `D-pad` to move around the map
   - Hold `LB + R3` to display the Utility Wheel during exploration or combat
   - Hold `LB + R3` to force mouse mode if you are stuck on some interaction screen and mouse mode is not activated
-  - Double-clicking with `R3` will toggle free camera mode on/off
+  - Double-clicking with `R3` will toggle freecam mode on/off
   - Double-clicking with `L3` will take a quick screenshot. (This image will be saved in your Windows Pictures folder)
   
 - **Fixed Camera Mode Commands:**
