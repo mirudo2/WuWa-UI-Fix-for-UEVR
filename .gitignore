@@ -3,6 +3,16 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/main/VisualStudio.gitignore
 
+sdkdump/
+cvardump.json
+log.txt
+user_script.txt
+imgui.ini
+injector_config.txt
+cvars_standard.txt
+cvars_data.txt
+cameras.txt
+
 # User-specific files
 *.rsuser
 *.suo

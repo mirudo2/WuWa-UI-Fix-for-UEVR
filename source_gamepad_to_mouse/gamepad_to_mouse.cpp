@@ -6,20 +6,14 @@
 
 using namespace uevr;
 
-#define PLUGIN_LOG_ONCE(...) { \
-    static bool logged = false; \
-    if (!logged) { \
-        logged = true; \
-        API::get()->log_info(__VA_ARGS__); \
-    } \
-}
-
-class GamepadToMousePlugin : public uevr::Plugin {
+class GamepadToMousePlugin : public Plugin {
 public:
     const UEVR_PluginInitializeParam* pluginParams;
     const UEVR_VRData* vrData;
 
-    GamepadToMousePlugin() = default;
+    GamepadToMousePlugin()
+        : _frameCount(0), _fps(0), _lastFpsTime(std::chrono::high_resolution_clock::now())
+    {}
 
     void on_dllmain() override {}
 
@@ -28,7 +22,6 @@ public:
         vrData = pluginParams->vr;
     }
 
-    // Sends a mouse input event with the specified flag.
     void SendMouseInput(DWORD mouseFlag) {
         INPUT input = {};
         input.type = INPUT_MOUSE;
@@ -36,7 +29,6 @@ public:
         SendInput(1, &input, sizeof(INPUT));
     }
 
-    // Sends a keyboard input event for the given key.
     void SendKeyboardInput(WORD key, bool keyDown) {
         INPUT input = {};
         input.type = INPUT_KEYBOARD;
@@ -45,262 +37,205 @@ public:
         SendInput(1, &input, sizeof(INPUT));
     }
 
-    // Clicks at a specific screen coordinate.
     void ClickAtCoordinate(int x, int y) {
-        int screenWidth = GetSystemMetrics(SM_CXSCREEN);
-        int screenHeight = GetSystemMetrics(SM_CYSCREEN);
-        LONG absX = (x * 65535) / screenWidth;
-        LONG absY = (y * 65535) / screenHeight;
-
-        INPUT inputs[3] = {};
-
-        // Move mouse to coordinate.
-        inputs[0].type = INPUT_MOUSE;
-        inputs[0].mi.dx = absX;
-        inputs[0].mi.dy = absY;
-        inputs[0].mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
-
-        // Left mouse button down.
-        inputs[1].type = INPUT_MOUSE;
-        inputs[1].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
-
-        // Left mouse button up.
-        inputs[2].type = INPUT_MOUSE;
-        inputs[2].mi.dwFlags = MOUSEEVENTF_LEFTUP;
-
-        SendInput(3, inputs, sizeof(INPUT));
+        int sw = GetSystemMetrics(SM_CXSCREEN);
+        int sh = GetSystemMetrics(SM_CYSCREEN);
+        LONG ax = (x * 65535) / sw;
+        LONG ay = (y * 65535) / sh;
+        INPUT in[3] = {};
+        in[0].type = INPUT_MOUSE;
+        in[0].mi.dx = ax;
+        in[0].mi.dy = ay;
+        in[0].mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
+        in[1].type = INPUT_MOUSE;
+        in[1].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+        in[2].type = INPUT_MOUSE;
+        in[2].mi.dwFlags = MOUSEEVENTF_LEFTUP;
+        SendInput(3, in, sizeof(INPUT));
     }
 
-    // Returns true if the cursor should be visible.
     bool isCursorVisible() {
-        char showCursor[256] = {};
-        vrData->get_mod_value("FrameworkConfig_AlwaysShowCursor", showCursor, 255);
-        return (strcmp(showCursor, "true") == 0);
+        char buf[256] = {};
+        vrData->get_mod_value("FrameworkConfig_AlwaysShowCursor", buf, 255);
+        return strcmp(buf, "true") == 0;
     }
 
-    // Tracks the previous state of button A for recentering.
     bool lastButtonAState = false;
 
-    // XInput state callback.
     void on_xinput_get_state(uint32_t* retval, uint32_t user_index, XINPUT_STATE* state) override {
-        if (!state)
-            return;
+        if (!state) return;
+
+        _frameCount++;
+        auto nowF = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> dtF = nowF - _lastFpsTime;
+        if (dtF.count() >= 1.0) {
+            _fps = _frameCount;
+            _frameCount = 0;
+            _lastFpsTime = nowF;
+        }
 
         processRecentering(state);
 
-        bool rightThumbPressed = (state->Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB) != 0;
-        bool leftShoulderPressed = (state->Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
+        bool rt = (state->Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB) != 0;
+        bool ls = (state->Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
 
         processSpecialCombination(state);
 
-        if (rightThumbPressed && leftShoulderPressed) {
-
+        if (rt && ls) {
             state->Gamepad.sThumbRX = 0;
             state->Gamepad.sThumbRY = 0;
-
             state->Gamepad.wButtons &= ~(XINPUT_GAMEPAD_LEFT_SHOULDER | XINPUT_GAMEPAD_RIGHT_THUMB);
-
         }
 
-        if (!isCursorVisible())
-            return;
+        if (!isCursorVisible()) return;
 
         processMouseMovementAndScroll(state);
         processMouseClickForA(state);
         processDPADKeys(state);
         processButtonB(state);
 
-        // Clear thumbstick and directional button inputs.
         state->Gamepad.sThumbLX = 0;
         state->Gamepad.sThumbLY = 0;
-
         state->Gamepad.wButtons &= ~(XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_X |
             XINPUT_GAMEPAD_DPAD_RIGHT | XINPUT_GAMEPAD_DPAD_LEFT |
             XINPUT_GAMEPAD_DPAD_UP | XINPUT_GAMEPAD_DPAD_DOWN);
-
     }
 
 private:
-    // Recenter view/horizon when left thumb and A are pressed.
+    int _frameCount;
+    int _fps;
+    std::chrono::time_point<std::chrono::high_resolution_clock> _lastFpsTime;
+
     void processRecentering(const XINPUT_STATE* state) {
-        bool leftThumbPressed = (state->Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_THUMB) != 0;
-        bool buttonAPressed = (state->Gamepad.wButtons & XINPUT_GAMEPAD_A) != 0;
-        if (leftThumbPressed && buttonAPressed && !lastButtonAState) {
+        bool lt = (state->Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_THUMB) != 0;
+        bool a = (state->Gamepad.wButtons & XINPUT_GAMEPAD_A) != 0;
+        if (lt && a && !lastButtonAState) {
             vrData->recenter_view();
             vrData->recenter_horizon();
         }
-        lastButtonAState = buttonAPressed;
+        lastButtonAState = a;
     }
 
-    // Helper to process keyboard events.
-    void processKeyEvent(WORD gamepadButton, WORD key, bool& lastState, const XINPUT_STATE* state) {
-        bool currentState = (state->Gamepad.wButtons & gamepadButton) != 0;
-        if (currentState && !lastState)
-            SendKeyboardInput(key, true);
-        else if (!currentState && lastState)
-            SendKeyboardInput(key, false);
-        lastState = currentState;
+    void processKeyEvent(WORD gb, WORD key, bool& ls, const XINPUT_STATE* state) {
+        bool cs = (state->Gamepad.wButtons & gb) != 0;
+        if (cs && !ls) SendKeyboardInput(key, true);
+        else if (!cs && ls) SendKeyboardInput(key, false);
+        ls = cs;
     }
 
-    // Process mouse movement and scrolling based on thumbstick input.
     void processMouseMovementAndScroll(const XINPUT_STATE* state) {
-        int thumbLX = state->Gamepad.sThumbLX;
-        int thumbLY = state->Gamepad.sThumbLY;
-        const int DEADZONE = 8000;
-        if (std::abs(thumbLX) < DEADZONE)
-            thumbLX = 0;
-        if (std::abs(thumbLY) < DEADZONE)
-            thumbLY = 0;
+        int lx = state->Gamepad.sThumbLX;
+        int ly = state->Gamepad.sThumbLY;
+        const int DZ = 8000;
+        if (abs(lx) < DZ) lx = 0;
+        if (abs(ly) < DZ) ly = 0;
 
-        // Process mouse movement.
-        float normLX = thumbLX / 32767.0f;
-        float normLY = thumbLY / 32767.0f;
-        const float sensitivity = 18.0f;
-        float targetVelX = normLX * sensitivity;
-        float targetVelY = normLY * sensitivity;
+        float nlx = lx / 32767.0f;
+        float nly = ly / 32767.0f;
+        const float sensitivity = 1000.0f;
+        float dt = _fps > 0 ? (1.0f / _fps) : 0.0f;
+        float tvx = nlx * sensitivity * dt;
+        float tvy = nly * sensitivity * dt;
 
-        static float smoothedVelX = 0.0f;
-        static float smoothedVelY = 0.0f;
-        const float smoothingFactor = 0.1f;
-        smoothedVelX += (targetVelX - smoothedVelX) * smoothingFactor;
-        smoothedVelY += (targetVelY - smoothedVelY) * smoothingFactor;
+        static float svx = 0.0f, svy = 0.0f;
+        const float sf = 0.1f;
+        svx += (tvx - svx) * sf;
+        svy += (tvy - svy) * sf;
 
-        static float accumulatedX = 0.0f;
-        static float accumulatedY = 0.0f;
-        accumulatedX += smoothedVelX;
-        accumulatedY += smoothedVelY;
+        static float ax = 0.0f, ay = 0.0f;
+        ax += svx;
+        ay += svy;
+        int mx = int(ax), my = int(ay);
+        ax -= mx;
+        ay -= my;
 
-        int moveX = static_cast<int>(accumulatedX);
-        int moveY = static_cast<int>(accumulatedY);
-        accumulatedX -= moveX;
-        accumulatedY -= moveY;
-
-        bool buttonXPressed = (state->Gamepad.wButtons & XINPUT_GAMEPAD_X) != 0;
-        if (!buttonXPressed) {
-            // Mouse movement.
-            if (moveX != 0 || moveY != 0) {
-                INPUT inputMove = {};
-                inputMove.type = INPUT_MOUSE;
-                inputMove.mi.dwFlags = MOUSEEVENTF_MOVE;
-                inputMove.mi.dx = moveX;
-                inputMove.mi.dy = -moveY; // Invert Y if needed.
-                SendInput(1, &inputMove, sizeof(INPUT));
+        bool xp = (state->Gamepad.wButtons & XINPUT_GAMEPAD_X) != 0;
+        if (!xp) {
+            if (mx || my) {
+                INPUT im = {};
+                im.type = INPUT_MOUSE;
+                im.mi.dwFlags = MOUSEEVENTF_MOVE;
+                im.mi.dx = mx;
+                im.mi.dy = -my;
+                SendInput(1, &im, sizeof(INPUT));
             }
         }
         else {
-            // Smooth scrolling using vertical thumbstick movement.
-            static auto lastScrollTime = std::chrono::steady_clock::now();
-            static float scrollAccumulator = 0.0f;
-
+            static auto lst = std::chrono::steady_clock::now();
+            static float sac = 0.0f;
             auto now = std::chrono::steady_clock::now();
-            float deltaTime = std::chrono::duration<float>(now - lastScrollTime).count();
-            lastScrollTime = now;
-
-            // Reset accumulator if thumbLY is zero.
-            if (thumbLY == 0) {
-                scrollAccumulator = 0.0f;
-                return;
-            }
-
-            // Remap thumbLY to an effective scroll magnitude.
-            float effectiveMagnitude = (std::abs(thumbLY) - DEADZONE) / (32767.0f - DEADZONE);
-            effectiveMagnitude = (thumbLY > 0) ? effectiveMagnitude : -effectiveMagnitude;
-
-            const float scrollSensitivity = 2500.0f; // Adjust sensitivity as needed.
-            scrollAccumulator += effectiveMagnitude * scrollSensitivity * deltaTime;
-
-            if (std::abs(scrollAccumulator) >= 1.0f) {
-                int scrollAmount = static_cast<int>(scrollAccumulator);
-                scrollAccumulator -= scrollAmount;
-
-                INPUT inputScroll = {};
-                inputScroll.type = INPUT_MOUSE;
-                inputScroll.mi.dwFlags = MOUSEEVENTF_WHEEL;
-                inputScroll.mi.mouseData = scrollAmount;
-                SendInput(1, &inputScroll, sizeof(INPUT));
+            float dt2 = std::chrono::duration<float>(now - lst).count();
+            lst = now;
+            if (ly == 0) { sac = 0.0f; return; }
+            float em = (abs(ly) - DZ) / float(32767 - DZ);
+            em = ly > 0 ? em : -em;
+            const float ss = 2500.0f;
+            sac += em * ss * dt2;
+            if (abs(sac) >= 1.0f) {
+                int sa = int(sac);
+                sac -= sa;
+                INPUT is = {};
+                is.type = INPUT_MOUSE;
+                is.mi.dwFlags = MOUSEEVENTF_WHEEL;
+                is.mi.mouseData = sa;
+                SendInput(1, &is, sizeof(INPUT));
             }
         }
     }
 
-    // Process left mouse click via A button (ignored when left thumb is pressed).
     void processMouseClickForA(const XINPUT_STATE* state) {
-        if (!(state->Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_THUMB)) {
-            static bool lastAState = false;
-            bool currentAState = (state->Gamepad.wButtons & XINPUT_GAMEPAD_A) != 0;
-            if (currentAState && !lastAState)
-                SendMouseInput(MOUSEEVENTF_LEFTDOWN);
-            else if (!currentAState && lastAState)
-                SendMouseInput(MOUSEEVENTF_LEFTUP);
-            lastAState = currentAState;
-        }
+        static bool la = false;
+        bool ca = (state->Gamepad.wButtons & XINPUT_GAMEPAD_A) != 0;
+        if (ca && !la) SendMouseInput(MOUSEEVENTF_LEFTDOWN);
+        else if (!ca && la) SendMouseInput(MOUSEEVENTF_LEFTUP);
+        la = ca;
     }
 
-    // Process DPAD keys mapping to keyboard (W, A, S, D).
     void processDPADKeys(const XINPUT_STATE* state) {
-        static bool lastDpadUp = false;
-        static bool lastDpadLeft = false;
-        static bool lastDpadDown = false;
-        static bool lastDpadRight = false;
-
-        processKeyEvent(XINPUT_GAMEPAD_DPAD_UP, 'W', lastDpadUp, state);
-        processKeyEvent(XINPUT_GAMEPAD_DPAD_LEFT, 'A', lastDpadLeft, state);
-        processKeyEvent(XINPUT_GAMEPAD_DPAD_DOWN, 'S', lastDpadDown, state);
-        processKeyEvent(XINPUT_GAMEPAD_DPAD_RIGHT, 'D', lastDpadRight, state);
+        static bool lu = false, ll = false, ld = false, lr = false;
+        processKeyEvent(XINPUT_GAMEPAD_DPAD_UP, 'W', lu, state);
+        processKeyEvent(XINPUT_GAMEPAD_DPAD_LEFT, 'A', ll, state);
+        processKeyEvent(XINPUT_GAMEPAD_DPAD_DOWN, 'S', ld, state);
+        processKeyEvent(XINPUT_GAMEPAD_DPAD_RIGHT, 'D', lr, state);
     }
 
-    // Process the B button to trigger a click at a specific coordinate.
     void processButtonB(const XINPUT_STATE* state) {
-        static bool lastBState = false;
-        bool currentBState = (state->Gamepad.wButtons & XINPUT_GAMEPAD_B) != 0;
-        if (currentBState && !lastBState) {
-            int screenWidth = GetSystemMetrics(SM_CXSCREEN);
-            int closeBtnX = (screenWidth / 2) + 860;
-            int targetY = 70;
-            ClickAtCoordinate(closeBtnX, targetY);
+        static bool lb = false;
+        bool cb = (state->Gamepad.wButtons & XINPUT_GAMEPAD_B) != 0;
+        if (cb && !lb) {
+            int sw = GetSystemMetrics(SM_CXSCREEN);
+            ClickAtCoordinate(sw / 2 + 800, 70);
         }
-        lastBState = currentBState;
+        lb = cb;
     }
 
-    // Process a special combination (right thumb + left shoulder) to simulate a Tab action.
     void processSpecialCombination(const XINPUT_STATE* state) {
-        bool rightThumbPressed = (state->Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB) != 0;
-        bool leftShoulderPressed = (state->Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
-        static bool lastCombination = false;
-        static bool tabActionSent = false;
-        static auto combinationStartTime = std::chrono::steady_clock::now();
-
-        bool currentCombination = rightThumbPressed && leftShoulderPressed;
-
-        if (currentCombination && !lastCombination) {
-            // Combination just started.
-            combinationStartTime = std::chrono::steady_clock::now();
-            tabActionSent = false;
-
-            int screenWidth = GetSystemMetrics(SM_CXSCREEN);
-            int screenHeight = GetSystemMetrics(SM_CYSCREEN);
-            ClickAtCoordinate(screenWidth / 2, screenHeight / 2);
-
+        bool rt = (state->Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB) != 0;
+        bool ls = (state->Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
+        static bool lc = false, ts = false;
+        static auto st = std::chrono::steady_clock::now();
+        bool cc = rt && ls;
+        if (cc && !lc) {
+            st = std::chrono::steady_clock::now();
+            ts = false;
+            int sw = GetSystemMetrics(SM_CXSCREEN);
+            int sh = GetSystemMetrics(SM_CYSCREEN);
+            ClickAtCoordinate(sw / 2, sh / 2);
             Sleep(30);
             SendKeyboardInput('V', true);
             SendKeyboardInput('V', false);
         }
-
-        if (currentCombination && !tabActionSent) {
-            auto now = std::chrono::steady_clock::now();
-            if (now - combinationStartTime >= std::chrono::milliseconds(800)) {
+        if (cc && !ts) {
+            if (std::chrono::steady_clock::now() - st >= std::chrono::milliseconds(800)) {
                 SendKeyboardInput(VK_TAB, true);
-                tabActionSent = true;
+                ts = true;
             }
         }
-        else if (!currentCombination && lastCombination) {
-            if (tabActionSent) {
-                SendKeyboardInput(VK_TAB, false);
-            }
+        else if (!cc && lc) {
+            if (ts) SendKeyboardInput(VK_TAB, false);
         }
-
-        lastCombination = currentCombination;
+        lc = cc;
     }
-
 };
 
 std::unique_ptr<GamepadToMousePlugin> g_plugin{ new GamepadToMousePlugin() };

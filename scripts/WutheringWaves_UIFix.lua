@@ -216,6 +216,8 @@ local UIHeightDialog = 10
 local first_recenter = nil
 local first_recenter_counter = 0
 
+local is_freecam = false
+
 uevr.sdk.callbacks.on_pre_engine_tick(function(engine, delta)
 
 	player_controller = api:get_player_controller(0)
@@ -223,6 +225,12 @@ uevr.sdk.callbacks.on_pre_engine_tick(function(engine, delta)
 	camera_actor = player_controller:GetViewTarget()
 	
 	view_target_name = string.sub(camera_actor:get_full_name(), 0, 11)
+	
+	if string.sub(view_target_name, 0, 5) == "Actor" then
+		is_freecam = true
+	else
+		is_freecam = false
+	end
 	
 	if IsUIToWorld then
 	
@@ -283,7 +291,7 @@ uevr.sdk.callbacks.on_pre_engine_tick(function(engine, delta)
 	
 		if IsUIToWorld then
 		
-			if string.sub(view_target_name, 0, 3) ~= "HUD" and string.sub(view_target_name, 0, 5) ~= "Actor" then
+			if string.sub(view_target_name, 0, 3) ~= "HUD" and not is_freecam then
 			
 				default_view_target = camera_actor
 				log_functions.log_warn("LuaUIFix: default_view_target " .. default_view_target:get_full_name())
@@ -331,7 +339,7 @@ uevr.sdk.callbacks.on_pre_engine_tick(function(engine, delta)
 				
 				ScreenSpaceActor:K2_SetActorRotation(ui_rotation, false, fhitresult, false)
 				
-				if string.sub(view_target_name, 0, 5) == "Actor" then new_location.Z = -500; end
+				if is_freecam then new_location.Z = -500; end
 				
 				ScreenSpaceActor:K2_SetActorLocation(kismet_math_library:VInterpTo(ScreenSpaceActor:K2_GetActorLocation(), new_location, delta, 60), false, fhitresult, false)
 		
@@ -361,7 +369,7 @@ uevr.sdk.callbacks.on_pre_engine_tick(function(engine, delta)
 			
 			ScreenSpaceActor:K2_SetActorRotation(ui_rotation, false, fhitresult, false)
 			
-			if string.sub(view_target_name, 0, 5) == "Actor" then new_location.Z = -500; end
+			if is_freecam then new_location.Z = -500; end
 					
 			ScreenSpaceActor:K2_SetActorLocation(kismet_math_library:VInterpTo(ScreenSpaceActor:K2_GetActorLocation(), new_location, delta, 60), false, fhitresult, false)
 		
@@ -382,7 +390,7 @@ uevr.sdk.callbacks.on_pre_engine_tick(function(engine, delta)
 			
 			ScreenSpaceActor:K2_SetActorRotation(ui_rotation, false, fhitresult, false)
 			
-			if string.sub(view_target_name, 0, 5) == "Actor" then new_location.Z = -500; end
+			if is_freecam then new_location.Z = -500; end
 					
 			ScreenSpaceActor:K2_SetActorLocation(kismet_math_library:VInterpTo(ScreenSpaceActor:K2_GetActorLocation(), new_location, delta, 60), false, fhitresult, false)
 		
@@ -512,7 +520,7 @@ uevr.sdk.callbacks.on_xinput_get_state(function(retval, user_index, state)
 	local GAMEPAD_A = gamepad.wButtons & XINPUT_GAMEPAD_A ~= 0
 	local GAMEPAD_B = gamepad.wButtons & XINPUT_GAMEPAD_B ~= 0
 	
-	--[[if not RIGHT_SHOULDER then
+	if not RIGHT_SHOULDER then -- Walk mode
 		local max_speed = 12000
 		
 		local thumb_x = gamepad.sThumbLX
@@ -528,7 +536,7 @@ uevr.sdk.callbacks.on_xinput_get_state(function(retval, user_index, state)
 		
 		gamepad.sThumbLX = thumb_x
 		gamepad.sThumbLY = thumb_y
-	end]]
+	end
 	
 	if RIGHT_THUMB and LEFT_SHOULDER then
 	
@@ -654,7 +662,7 @@ uevr.sdk.callbacks.on_xinput_get_state(function(retval, user_index, state)
 			
 			IsUIInteraction = true
 			
-			if get_mod_value("FrameworkConfig_AlwaysShowCursor") == "false" then
+			if get_mod_value("FrameworkConfig_AlwaysShowCursor") == "false" and not is_freecam then
 			
 				m_VR.set_mod_value("FrameworkConfig_AlwaysShowCursor", "true")
 				print('IsUIInteraction', IsUIInteraction)
@@ -667,6 +675,10 @@ uevr.sdk.callbacks.on_xinput_get_state(function(retval, user_index, state)
 				UIHeightDialog = 10
 				
 				print('UIDistanceDialog', UIDistanceDialog)
+			
+			elseif get_mod_value("FrameworkConfig_AlwaysShowCursor") == "true" and is_freecam then
+			
+				m_VR.set_mod_value("FrameworkConfig_AlwaysShowCursor", "false")
 			
 			end
 		
@@ -684,6 +696,12 @@ uevr.sdk.callbacks.on_xinput_get_state(function(retval, user_index, state)
 		end
 	
 	end
+	
+			if get_mod_value("FrameworkConfig_AlwaysShowCursor") == "true" and is_freecam then
+			
+				m_VR.set_mod_value("FrameworkConfig_AlwaysShowCursor", "false")
+			
+			end
 	
 end)
 

@@ -36,6 +36,25 @@ local GameplayStatics = GameplayStatics_c:get_class_default_object()
 		return str
 		
 	end
+	
+	local fpsCounter = {
+		frames = 0,
+		elapsed = 0.0,
+		currentFPS = 0
+	}
+	
+	local function updateFPS(delta)
+		fpsCounter.frames = fpsCounter.frames + 1
+		fpsCounter.elapsed = fpsCounter.elapsed + delta
+
+		if fpsCounter.elapsed >= 1.0 then
+			fpsCounter.currentFPS = fpsCounter.frames
+			fpsCounter.frames = 0
+			fpsCounter.elapsed = fpsCounter.elapsed - 1.0
+		end
+
+		return fpsCounter.currentFPS
+	end
 
 local world = nil
 local level = nil
@@ -51,10 +70,11 @@ local default_game_camera_actor = nil
 local is_freecam = false
 
 local deadzone = 0.15
-local freecam_rotation_speed = 2
+local freecam_rotation_speed = 2.5
 local freecam_location_speed = 10
 local freecam_up_speed = 6
-local freecam_dash_speed = 2
+local freecam_dash_speed = 3
+local freecam_turbo_dash_speed = 9
 local freecam_fov = 75
 
 print("-------- Freecam Plugin!!! --------")
@@ -129,7 +149,11 @@ local function game_freecam(is_enable)
 
 end
 
+local fps = 0
+
 uevr.sdk.callbacks.on_pre_engine_tick(function(engine, delta)
+
+	fps = updateFPS(delta)
 
 	player_controller = api:get_player_controller(0)
 	
@@ -174,6 +198,7 @@ end)
 
 local last_LEFT_THUMB = false
 local last_RIGHT_THUMB = false
+local last_RT = false
 local leftThumbStartTime, hasTriggered
 
 local function normalize_thumbstick(value, deadzone)
@@ -181,15 +206,30 @@ local function normalize_thumbstick(value, deadzone)
 	return math.abs(normalized) > deadzone and normalized or 0.0
 end
 
-local up_speed = 0
-local location_speed = 0
+local function getNormalizedSpeed(baseSpeed, targetFPS)
+    local fps = fpsCounter.currentFPS > 0 and fpsCounter.currentFPS or targetFPS
+	if baseSpeed * (targetFPS / fps) < 0.5 then return 0.5 end
+    return baseSpeed * (targetFPS / fps)
+end
 
-local lastClickTime_L = 0
-local lastClickTime_R = 0
+local up_speed, location_speed = 0
+
+local last_THUMB_ClickTime_L = 0
+local last_THUMB_ClickTime_R = 0
 local doubleClickThreshold = 0.3
+
+local __prevRtVal = 0
+local __lastRtPressTime = 0
+local __rtClickCounter = 0
+local __rtDoubleClickThreshold = 0.3
+local __rtDoubleClickFlag = false
 	
 uevr.sdk.callbacks.on_xinput_get_state(function(retval, user_index, state)
 
+	local _freecam_rotation_speed = getNormalizedSpeed(freecam_rotation_speed, 60)
+	local _freecam_location_speed = getNormalizedSpeed(freecam_location_speed, 60)
+	local _freecam_up_speed = getNormalizedSpeed(freecam_up_speed, 60)
+	
 	local gamepad = state.Gamepad
 	
     local LEFT_THUMB = gamepad.wButtons & XINPUT_GAMEPAD_LEFT_THUMB ~= 0
@@ -204,7 +244,8 @@ uevr.sdk.callbacks.on_xinput_get_state(function(retval, user_index, state)
 		
 		if leftTrigger then
 		
-			up_speed = freecam_up_speed
+			up_speed = _freecam_up_speed
+			if rightTrigger then up_speed = _freecam_up_speed * 2 end
 		
 		else
 		
@@ -214,13 +255,41 @@ uevr.sdk.callbacks.on_xinput_get_state(function(retval, user_index, state)
 		
 		if rightTrigger then
 		
-			location_speed = freecam_location_speed * freecam_dash_speed
+			location_speed = _freecam_location_speed * freecam_dash_speed
 		
 		else
 		
-			location_speed = freecam_location_speed
+			location_speed = _freecam_location_speed
 		
 		end
+		
+		local __currentRtVal = gamepad.bRightTrigger / 255
+		if __currentRtVal > 0 and __prevRtVal == 0 then
+			local __now = os.clock()
+			__rtClickCounter = __rtClickCounter + 1
+			if __rtClickCounter == 1 then
+				__lastRtPressTime = __now
+			elseif __rtClickCounter == 2 then
+				if __now - __lastRtPressTime <= __rtDoubleClickThreshold then
+					__rtDoubleClickFlag = true
+				end
+				__rtClickCounter = 0
+			end
+		end
+
+		if __rtClickCounter == 1 and (os.clock() - __lastRtPressTime) > __rtDoubleClickThreshold then
+			__rtClickCounter = 0
+		end
+
+		if __rtDoubleClickFlag then
+			location_speed = _freecam_location_speed * freecam_turbo_dash_speed
+		end
+
+		if __currentRtVal == 0 and __prevRtVal > 0 then
+			__rtDoubleClickFlag = false
+		end
+
+		__prevRtVal = __currentRtVal
 		
 		gamepad.bLeftTrigger = 0
 		gamepad.bRightTrigger = 0
@@ -256,10 +325,10 @@ uevr.sdk.callbacks.on_xinput_get_state(function(retval, user_index, state)
 			combined_movement
 		)
 		
-		local new_pitch = current_rotation.Pitch + (ry_norm * freecam_rotation_speed)
+		local new_pitch = current_rotation.Pitch + (ry_norm * _freecam_rotation_speed)
 		
 		new_pitch = new_pitch > 89.0 and 89.0 or (new_pitch < -89.0 and -89.0 or new_pitch)
-		local new_yaw = current_rotation.Yaw + (rx_norm * freecam_rotation_speed)
+		local new_yaw = current_rotation.Yaw + (rx_norm * _freecam_rotation_speed)
 		
 		local new_rotation = StructObject.new(rotator_c)
 		new_rotation.Pitch = new_pitch
@@ -289,13 +358,13 @@ uevr.sdk.callbacks.on_xinput_get_state(function(retval, user_index, state)
 	
 	if LEFT_THUMB and not last_LEFT_THUMB then
 	
-		if (ClickTime - lastClickTime_L) < doubleClickThreshold then
+		if (ClickTime - last_THUMB_ClickTime_L) < doubleClickThreshold then
 		
 			vr.set_mod_value("VR_JoystickDeadzone", "0.200005")
 		
 		else
 		
-			lastClickTime_L = ClickTime
+			last_THUMB_ClickTime_L = ClickTime
 		
 		end
 	
@@ -303,7 +372,7 @@ uevr.sdk.callbacks.on_xinput_get_state(function(retval, user_index, state)
 	
 		if RIGHT_THUMB and not last_RIGHT_THUMB then
 		
-			if (ClickTime - lastClickTime_R) < doubleClickThreshold then
+			if (ClickTime - last_THUMB_ClickTime_R) < doubleClickThreshold then
 			
 				--[[if get_mod_value("VR_EnableGUI") == "true" then
 					vr.set_mod_value("VR_EnableGUI", "false")
@@ -317,7 +386,7 @@ uevr.sdk.callbacks.on_xinput_get_state(function(retval, user_index, state)
 			
 			else
 			
-				lastClickTime_R = ClickTime
+				last_THUMB_ClickTime_R = ClickTime
 			
 			end
 		
