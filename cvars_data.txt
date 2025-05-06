@@ -1,6 +1,0 @@
-Engine_r.MotionBlur.Max=-1.000000
-Renderer_r.Color.Max=1.068000
-Renderer_r.Color.Mid=0.473000
-Renderer_r.Color.Min=-0.029000
-Renderer_r.Tonemapper.Sharpen=0.551000
-Renderer_r.TonemapperGamma=2.200000
